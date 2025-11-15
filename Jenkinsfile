@@ -2,11 +2,13 @@ pipeline {
   agent any
 
   environment {
-    NEXUS_URL   = "http://3.17.13.134:8081/repository/maven-releases/"
-    DOCKER_REPO = "saikumar7596/pz-tomcat"
+    NEXUS_URL   = "http://54.81.139.84:8081/repository/maven-releases/"
+    DOCKER_REPO = "saikumar7596/my-repo"    // your Docker Hub repo
     GROUP_ID    = "com.example"
     ARTIFACT_ID = "puzzle-game-webapp"
     MVN_OPTS    = "-DskipTests"
+    DEPLOY_HOST = "54.81.139.84"
+    CONTAINER_NAME = "tomcat"
   }
 
   tools {
@@ -15,10 +17,11 @@ pipeline {
   }
 
   stages {
+
     stage('Checkout') {
       steps {
         checkout scm
-        script { echo "Commit: ${env.GIT_COMMIT ?: 'unknown'}" }
+        script { echo "Commit: ${env.GIT_COMMIT ?: 'local'}" }
       }
     }
 
@@ -53,11 +56,21 @@ pipeline {
             def VERSION = sh(script: "mvn help:evaluate -Dexpression=project.version -q -DforceStdout", returnStdout: true).trim()
             def ARTIFACT_PATH = "${GROUP_ID.replace('.','/')}/${ARTIFACT_ID}/${VERSION}/${ARTIFACT_ID}-${VERSION}.war"
             echo "Uploading ${WAR} to ${NEXUS_URL}${ARTIFACT_PATH}"
-            sh """
-              curl -v -u ${NEXUS_USER}:${NEXUS_PASS} --upload-file ${WAR} "${NEXUS_URL}${ARTIFACT_PATH}"
-            """
+            sh """curl -v -u ${NEXUS_USER}:${NEXUS_PASS} --upload-file ${WAR} "${NEXUS_URL}${ARTIFACT_PATH}" """
           }
         }
+      }
+    }
+
+    stage('Prepare WAR for Docker') {
+      steps {
+        sh '''
+          set -e
+          WAR=$(ls target/*.war | head -n1)
+          if [ -z "$WAR" ]; then echo "No WAR found"; exit 1; fi
+          cp -f "$WAR" target/app.war
+          ls -lh target/app.war
+        '''
       }
     }
 
@@ -87,7 +100,22 @@ pipeline {
         }
       }
     }
-  } // stages
+
+    stage('Deploy on same EC2 via SSH') {
+      steps {
+        // Jenkins must have SSH credential with id 'docker-server'
+        sshagent(['docker-server']) {
+          sh """
+            ssh -o StrictHostKeyChecking=no ubuntu@${DEPLOY_HOST} \\
+            'docker stop ${CONTAINER_NAME} 2>/dev/null || true && \\
+             docker rm ${CONTAINER_NAME} 2>/dev/null || true && \\
+             docker pull ${DOCKER_REPO}:latest && \\
+             docker run -d --name ${CONTAINER_NAME} -p 8080:8080 --restart unless-stopped ${DOCKER_REPO}:latest'
+          """
+        }
+      }
+    }
+  }
 
   post {
     success { echo "PIPELINE SUCCEEDED" }
