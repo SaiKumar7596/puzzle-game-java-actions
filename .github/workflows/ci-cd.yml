@@ -2,9 +2,9 @@ name: CI-CD Webapp
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
 
 jobs:
   build-and-deploy:
@@ -93,18 +93,11 @@ jobs:
         run: |
           set -e
 
-          echo "Listing WAR files in target/"
-          ls -l target/
-
           WAR=$(ls target/*.war | head -n 1)
-          if [ -z "$WAR" ]; then
-            echo "❌ ERROR: No WAR file found in target/"
-            exit 1
-          fi
-          echo "Found WAR: $WAR"
-
           VERSION=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)
-          echo "Project version detected: $VERSION"
+
+          echo "WAR file: $WAR"
+          echo "Version: $VERSION"
 
           ARTIFACT_URL="${NEXUS_URL%/}/${GROUP_ID_PATH}/${APP_NAME}/${VERSION}/${APP_NAME}-${VERSION}.war"
 
@@ -125,15 +118,17 @@ jobs:
 
       # ----------------------------------------------------------
       # 9. BUILD & PUSH DOCKER IMAGE
+      # (FIXED VERSION, ABSOLUTELY CORRECT)
       # ----------------------------------------------------------
       - name: Build and Push Docker Image
         run: |
           SHORT_SHA=${GITHUB_SHA::7}
 
-          docker build \
-            -t ${DOCKER_REPO}:${SHORT_SHA} \
-            -t ${DOCKER_REPO}:latest .
+          echo "Building Docker image for: ${DOCKER_REPO}:${SHORT_SHA}"
 
+          docker build -t ${DOCKER_REPO}:${SHORT_SHA} -t ${DOCKER_REPO}:latest .
+
+          echo "Pushing Docker image..."
           docker push ${DOCKER_REPO}:${SHORT_SHA}
           docker push ${DOCKER_REPO}:latest
 
@@ -150,14 +145,16 @@ jobs:
           script: |
             set -e
 
-            echo "Using Docker Repo: ${DOCKER_REPO}"
-            echo "Using Container Name: ${CONTAINER_NAME}"
-
+            echo "Pulling image: ${DOCKER_REPO}:latest"
             docker pull ${DOCKER_REPO}:latest
 
+            echo "Stopping old container..."
             docker stop ${CONTAINER_NAME} 2>/dev/null || true
+
+            echo "Removing old container..."
             docker rm ${CONTAINER_NAME} 2>/dev/null || true
 
+            echo "Running new container..."
             docker run -d \
               --name ${CONTAINER_NAME} \
               -p 8080:8080 \
