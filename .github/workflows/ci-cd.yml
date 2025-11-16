@@ -134,4 +134,32 @@ jobs:
             -t ${DOCKER_REPO}:${SHORT_SHA} \
             -t ${DOCKER_REPO}:latest .
 
-          docker push ${DOC
+          docker push ${DOCKER_REPO}:${SHORT_SHA}
+          docker push ${DOCKER_REPO}:latest
+
+      # ----------------------------------------------------------
+      # 10. DEPLOY TO EC2 OVER SSH
+      # ----------------------------------------------------------
+      - name: Deploy to Remote Tomcat Server
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ env.DEPLOY_HOST }}
+          username: ${{ env.DEPLOY_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          envs: "DOCKER_REPO, CONTAINER_NAME"
+          script: |
+            set -e
+
+            echo "Using Docker Repo: ${DOCKER_REPO}"
+            echo "Using Container Name: ${CONTAINER_NAME}"
+
+            docker pull ${DOCKER_REPO}:latest
+
+            docker stop ${CONTAINER_NAME} 2>/dev/null || true
+            docker rm ${CONTAINER_NAME} 2>/dev/null || true
+
+            docker run -d \
+              --name ${CONTAINER_NAME} \
+              -p 8080:8080 \
+              --restart unless-stopped \
+              ${DOCKER_REPO}:latest
