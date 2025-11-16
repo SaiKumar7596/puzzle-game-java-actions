@@ -1,143 +1,77 @@
-name: CI-CD  Webapp
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
 
-on:
-  push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
+    <modelVersion>4.0.0</modelVersion>
 
-jobs:
-  build-and-deploy:
-    runs-on: ubuntu-latest
+    <groupId>com.example</groupId>
+    <artifactId>puzzle-game-webapp</artifactId>
+    
+    <!-- ⭐ IMPORTANT: Release version, NOT SNAPSHOT -->
+    <version>1.0</version>
 
-    env:
-      # Project / server configuration (edit only if these change)
-      NEXUS_URL: "http://54.81.139.84:8081/repository/maven-releases/"
-      GROUP_ID_PATH: "com/example"
-      APP_NAME: "puzzle-game-webapp"
-      DOCKER_REPO: "saikumar7596/my-repo"
-      DEPLOY_HOST: "54.81.139.84"
-      DEPLOY_USER: "ubuntu"
-      CONTAINER_NAME: "tomcat"
+    <packaging>war</packaging>
 
-    steps:
+    <name>Puzzle Game Webapp</name>
+    <description>Simple Java 17 web application replica of a puzzle game</description>
 
-      # 1) Checkout
-      - name: Checkout repository
-        uses: actions/checkout@v4
+    <properties>
+        <maven.compiler.source>17</maven.compiler.source>
+        <maven.compiler.target>17</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <maven.compiler.release>17</maven.compiler.release>
+        <failOnMissingWebXml>false</failOnMissingWebXml>
+    </properties>
 
-      # 2) Java (JDK 17)
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 17
-          cache: maven
+    <dependencies>
+        <!-- Servlet API provided by the container -->
+        <dependency>
+            <groupId>jakarta.servlet</groupId>
+            <artifactId>jakarta.servlet-api</artifactId>
+            <version>6.0.0</version>
+            <scope>provided</scope>
+        </dependency>
 
-      - name: Show build info
-        run: |
-          echo "Commit SHA = $GITHUB_SHA"
-          mvn -v
+        <!-- JUnit 5 for tests -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>5.10.2</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
 
-      # 3) SonarQube analysis (self-hosted Sonar)
-      - name: SonarQube Scan
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
-        run: |
-          echo "Using Sonar URL: $SONAR_HOST_URL"
-          mvn -B -X -e clean verify sonar:sonar \
-            -DskipTests=true \
-            -Dsonar.projectKey=${{ env.APP_NAME }} \
-            -Dsonar.host.url="${SONAR_HOST_URL}" \
-            -Dsonar.login="${SONAR_TOKEN}"
+    <build>
+        <plugins>
 
-      # 4) Install jq (used for Quality Gate API)
-      - name: Install jq
-        run: sudo apt-get update && sudo apt-get install -y jq
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.11.0</version>
+                <configuration>
+                    <release>17</release>
+                </configuration>
+            </plugin>
 
-      # 5) SonarQube Quality Gate check (via API)
-      - name: Check SonarQube Quality Gate
-        if: success()
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
-        run: |
-          echo "Checking Quality Gate status..."
-          # Query project status
-          STATUS=$(curl -s -u "${SONAR_TOKEN}:" \
-            "${SONAR_HOST_URL%/}/api/qualitygates/project_status?projectKey=${APP_NAME}" \
-            | jq -r '.projectStatus.status')
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.2.5</version>
+                <configuration>
+                    <useModulePath>false</useModulePath>
+                </configuration>
+            </plugin>
 
-          echo "Quality Gate result: $STATUS"
-          if [ "$STATUS" != "OK" ]; then
-            echo "❌ Quality Gate FAILED"
-            exit 1
-          fi
-          echo "✅ Quality Gate PASSED"
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-war-plugin</artifactId>
+                <version>3.4.0</version>
+                <configuration>
+                    <failOnMissingWebXml>false</failOnMissingWebXml>
+                </configuration>
+            </plugin>
 
-      # 6) Build WAR with Maven
-      - name: Build WAR
-        run: mvn -B clean package -DskipTests=false
+        </plugins>
+    </build>
 
-      # 7) Upload WAR to Nexus Releases
-      - name: Upload WAR to Nexus Releases
-        env:
-          NEXUS_USER: ${{ secrets.NEXUS_USER }}
-          NEXUS_PASS: ${{ secrets.NEXUS_PASS }}
-        run: |
-          set -e
-          WAR=$(ls target/*.war | head -n 1)
-          if [ -z "$WAR" ]; then echo "No WAR found"; exit 1; fi
-          VERSION=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)
-          ARTIFACT_PATH="${GROUP_ID_PATH}/${APP_NAME}/${VERSION}/${APP_NAME}-${VERSION}.war"
-          ARTIFACT_URL="${NEXUS_URL%/}/${ARTIFACT_PATH}"
-          echo "Uploading WAR → ${ARTIFACT_URL}"
-          curl -v -u "${NEXUS_USER}:${NEXUS_PASS}" --upload-file "${WAR}" "${ARTIFACT_URL}"
-
-      # 8) Login to Docker Hub
-      - name: Docker Login
-        uses: docker/login-action@v2
-        with:
-          username: ${{ secrets.DOCKERHUB_USER }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      # 9) Build & push Docker image using Buildx
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v4
-        with:
-          push: true
-          tags: |
-            ${DOCKER_REPO}:${{ github.sha :: 7 }}
-            ${DOCKER_REPO}:latest
-          build-args: |
-            NEXUS_URL=${{ env.NEXUS_URL }}
-            GROUP_ID_PATH=${{ env.GROUP_ID_PATH }}
-            APP_NAME=${{ env.APP_NAME }}
-            VERSION=${{ steps.get_version.outputs.version || '' }}
-        env:
-          # provide Nexus creds as build args (safely passed here as env for build context)
-          NEXUS_USER: ${{ secrets.NEXUS_USER }}
-          NEXUS_PASS: ${{ secrets.NEXUS_PASS }}
-
-      # Helper step: publish version output for build-args (optional)
-      - name: get version
-        id: get_version
-        run: |
-          echo "version=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)" >> $GITHUB_OUTPUT
-
-      # 10) Deploy to EC2 via SSH (pull & run)
-      - name: Deploy to Remote Tomcat Server
-        uses: appleboy/ssh-action@v1.0.0
-        with:
-          host: ${{ env.DEPLOY_HOST }}
-          username: ${{ env.DEPLOY_USER }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          script: |
-            set -e
-            echo "Pulling docker image ${DOCKER_REPO}:latest"
-            docker pull ${DOCKER_REPO}:latest
-            docker stop ${CONTAINER_NAME} 2>/dev/null || true
-            docker rm ${CONTAINER_NAME} 2>/dev/null || true
-            docker run -d --name ${CONTAINER_NAME} -p 8080:8080 --restart unless-stopped ${DOCKER_REPO}:latest
-
+</project>
